@@ -1,0 +1,29 @@
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=env:OTEL_COLLECTOR_CONFIG", "${OTELCOL_ARGS}"]
+    ports:
+      - "4317:4317"   # OTLP gRPC receiver
+    environment:
+      OTEL_COLLECTOR_CONFIG: |
+        receivers:
+          otlp:
+            protocols:
+              grpc:
+                endpoint: 0.0.0.0:4317
+        processors:
+          batch:
+        exporters:
+          debug/traces:
+          debug/metrics:
+        connectors:
+        service:
+          pipelines:
+            traces:
+              receivers: [otlp]
+              processors: [batch]
+              exporters: [debug/traces]
+            metrics:
+              receivers: [otlp]
+              processors: [batch]
+              exporters: [debug/metrics]
