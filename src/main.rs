@@ -78,7 +78,7 @@ fn register_healthchecks() -> Vec<ObservableGauge<u64>> {
                         ],
                     );
                 })
-                .init()
+                .build()
         })
         .collect::<Vec<_>>()
 }

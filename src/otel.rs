@@ -1,16 +1,15 @@
+use std::time::Duration;
+
 use opentelemetry::{
-    global::{self},
+    global,
     trace::TracerProvider,
     KeyValue,
 };
-use opentelemetry_otlp::WithExportConfig;
+use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::{
-    metrics::{
-        data::Temporality, reader::TemporalitySelector, InstrumentKind, MeterProviderBuilder,
-        PeriodicReader, SdkMeterProvider,
-    },
+    metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider, Temporality},
     runtime,
-    trace::{BatchConfig, RandomIdGenerator, Sampler, Tracer},
+    trace::{self as sdktrace, RandomIdGenerator, Sampler},
     Resource,
 };
 use opentelemetry_semantic_conventions::{
@@ -35,8 +34,10 @@ fn resource() -> Resource {
 }
 
 pub fn setup_tracing_subscriber() -> OtelGuard {
-    let tracer = init_tracer();
+    let tracer_provider = init_tracer_provider();
     let meter_provider = init_meter_provider();
+
+    let tracer = tracer_provider.tracer("tracing-otel-subscriber");
 
     let filter = if std::env::var("RUST_LOG").is_ok() {
         EnvFilter::builder().from_env_lossy()
@@ -54,47 +55,51 @@ pub fn setup_tracing_subscriber() -> OtelGuard {
         .with(OpenTelemetryLayer::new(tracer))
         .init();
 
-    OtelGuard { meter_provider }
+    OtelGuard {
+        tracer_provider,
+        meter_provider,
+    }
 }
 
 // Construct Tracer for OpenTelemetryLayer
-fn init_tracer() -> Tracer {
-    let tracer_provider = opentelemetry_otlp::new_pipeline()
-        .tracing()
-        .with_trace_config(
-            opentelemetry_sdk::trace::Config::default()
-                // Customize sampling strategy
-                .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
-                    1.0,
-                ))))
-                // If export trace to AWS X-Ray, you can use XrayIdGenerator
-                .with_id_generator(RandomIdGenerator::default())
-                .with_resource(resource()),
-        )
-        .with_exporter(
-            opentelemetry_otlp::new_exporter()
-                .tonic()
-                .with_endpoint(CONFIG.collector_uri.clone()),
-        )
-        .with_batch_config(BatchConfig::default())
-        .install_batch(runtime::Tokio)
-        .expect("opentelemetry tracer to configure correctly");
+fn init_tracer_provider() -> sdktrace::TracerProvider {
+    let exporter = SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(CONFIG.collector_uri.clone())
+        .build()
+        .unwrap();
+    let config = opentelemetry_sdk::trace::Config::default()
+        // Customize sampling strategy
+        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+            1.0,
+        ))))
+        // If export trace to AWS X-Ray, you can use XrayIdGenerator
+        .with_id_generator(RandomIdGenerator::default())
+        .with_resource(resource());
+    // let exporter = opentelemetry_stdout::SpanExporter::default();
+    let tracer_provider = opentelemetry_sdk::trace::TracerProvider::builder()
+        .with_batch_exporter(exporter, runtime::Tokio)
+        .with_config(config)
+        // .with_config(opentelemetry_sdk::trace::Config::default().with_resource(resource()))
+        .build();
 
     global::set_tracer_provider(tracer_provider.clone());
 
-    tracer_provider.tracer("tracing-otel-subscriber")
+    return tracer_provider;
 }
 
 // Construct MeterProvider for MetricsLayer
 fn init_meter_provider() -> SdkMeterProvider {
-    let exporter = opentelemetry_otlp::new_exporter()
-        .tonic()
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_tonic()
         .with_endpoint(CONFIG.collector_uri.clone())
-        .build_metrics_exporter(Box::new(DeltaTemporalitySelector::new()))
+        .with_temporality(Temporality::Delta)
+        .build()
         .unwrap();
 
     let reader = PeriodicReader::builder(exporter, runtime::Tokio)
         .with_interval(CONFIG.metrics_interval)
+        .with_timeout(Duration::from_secs(10))
         .build();
 
     let meter_provider = MeterProviderBuilder::default()
@@ -108,53 +113,19 @@ fn init_meter_provider() -> SdkMeterProvider {
 }
 
 pub struct OtelGuard {
+    tracer_provider: sdktrace::TracerProvider,
     meter_provider: SdkMeterProvider,
 }
 
 impl Drop for OtelGuard {
     fn drop(&mut self) {
-        println!("dropping otel guard!");
-        if let Err(err) = self.meter_provider.shutdown() {
-            eprintln!("{err:?}");
-        }
-        opentelemetry::global::shutdown_tracer_provider();
-    }
-}
-
-/// A temporality selector that returns [`Delta`][Temporality::Delta] for all
-/// instruments except `UpDownCounter` and `ObservableUpDownCounter`.
-///
-/// This temporality selector is equivalent to OTLP Metrics Exporter's
-/// `Delta` temporality preference (see [its documentation][exporter-docs]).
-///
-/// [exporter-docs]: https://github.com/open-telemetry/opentelemetry-specification/blob/a1c13d59bb7d0fb086df2b3e1eaec9df9efef6cc/specification/metrics/sdk_exporters/otlp.md#additional-configuration
-#[derive(Clone, Default, Debug)]
-pub struct DeltaTemporalitySelector {
-    pub(crate) _private: (),
-}
-
-impl DeltaTemporalitySelector {
-    /// Create a new default temporality selector.
-    pub fn new() -> Self {
-        Self::default()
-    }
-}
-
-impl TemporalitySelector for DeltaTemporalitySelector {
-    #[rustfmt::skip]
-    fn temporality(&self, kind: InstrumentKind) -> Temporality {
-        match kind {
-            InstrumentKind::Counter
-            | InstrumentKind::Histogram
-            | InstrumentKind::ObservableCounter
-            | InstrumentKind::Gauge
-            | InstrumentKind::ObservableGauge => {
-                Temporality::Delta
-            }
-            InstrumentKind::UpDownCounter
-            | InstrumentKind::ObservableUpDownCounter => {
-                Temporality::Cumulative
-            }
-        }
+        tracing::debug!("shutdown meter_provider!");
+        self.meter_provider
+            .shutdown()
+            .expect("SdkMeterProvider should shutdown properly!");
+        tracing::debug!("shutdown tracer_provider!");
+        self.tracer_provider
+            .shutdown()
+            .expect("TracerProvider should shutdown properly!");
     }
 }

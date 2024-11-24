@@ -40,7 +40,7 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
                     .parse::<u64>()
                     .expect("provided interval to be a valid u64")
             })
-            .unwrap_or(15),
+            .unwrap_or(5),
     );
 
     let gauge_name =
