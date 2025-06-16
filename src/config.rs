@@ -1,12 +1,15 @@
-use std::{net::IpAddr, str::FromStr, time::Duration};
+use std::{net::IpAddr, str::FromStr, sync::Arc, time::Duration};
 
+use apalis_cron::Schedule;
 use once_cell::sync::Lazy;
 
-use crate::HealthCheck;
+use crate::sweep::HealthCheck;
 
 const SERVICE_IP_ENV_KEY: &str = "SERVICE_IP";
 const PORT_ENV_KEY: &str = "PORT";
 const A10Y_HEALTH_CHECKS_ENV_KEY: &str = "A10Y_HEALTH_CHECKS";
+
+const SWEEP_SCHEDULE_CRON_ENV_KEY: &str = "SWEEP_SCHEDULE_CRON";
 
 const OTEL_METRIC_READER_INTERVAL_SECS_ENV_KEY: &str = "OTEL_METRIC_READER_INTERVAL_SECS";
 const GAUGE_MEASUREMENT_NAME_ENV_KEY: &str = "GAUGE_MEASUREMENT_NAME";
@@ -25,11 +28,12 @@ impl std::fmt::Debug for Secret {
 
 #[derive(Debug)]
 pub struct Config {
+    pub sweep_schedule: Schedule,
     pub service_address: (IpAddr, u16),
     pub collector_uri: String,
     pub metrics_interval: Duration,
     pub gauge_name: String,
-    pub health_checks: Vec<HealthCheck>,
+    pub health_checks: Vec<Arc<HealthCheck>>,
 }
 
 pub static CONFIG: Lazy<Config> = Lazy::new(|| {
@@ -61,11 +65,17 @@ pub static CONFIG: Lazy<Config> = Lazy::new(|| {
         .map(|port| port.parse::<u16>().expect("provided port to be valid"))
         .unwrap_or(3000);
 
+    let sweep_schedule = Schedule::from_str(
+        &std::env::var(SWEEP_SCHEDULE_CRON_ENV_KEY).unwrap_or("*/15 * * * * *".to_string()),
+    )
+    .expect("sweep schedule should be a valid cron expression");
+
     Config {
         service_address: (service_ip, port),
         collector_uri: "grpc://localhost:4317".to_string(),
         metrics_interval,
         gauge_name,
-        health_checks,
+        health_checks: health_checks.into_iter().map(Arc::new).collect(),
+        sweep_schedule,
     }
 });

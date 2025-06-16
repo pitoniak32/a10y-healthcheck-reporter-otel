@@ -1,4 +1,4 @@
-FROM rust:1.80 as builder
+FROM rust:1.87 as builder
 
 WORKDIR /usr/src/a10y-healthcheck-reporter-otel
 

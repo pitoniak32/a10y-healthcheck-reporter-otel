@@ -7,6 +7,8 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tracing_log::log;
+use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Clone, Serialize)]
 struct HealthCheckResult {
@@ -62,18 +64,24 @@ pub async fn server_error() -> Result<Response, StatusCode> {
 
 pub async fn healthcheck(State(state): State<HealthCheckStatus>) -> Result<Response, StatusCode> {
     let status = state.clone();
-    println!("{status:?} - healthcheck has been called!");
+    log::info!("{status:?} - healthcheck has been called!");
     Ok((StatusCode::OK, Json(HealthCheckResult { status })).into_response())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        ))
+        .init();
+
     let health: HealthCheckStatus =
         HealthCheckStatus::from_str(&std::env::var("HEALTH").unwrap_or("unknown".to_string()));
 
     let listener = tokio::net::TcpListener::bind((
         "0.0.0.0",
-        std::env::var("PORT")
+        std::env::var("EXAMPLE_SERVICE_PORT")
             .unwrap_or("3000".to_string())
             .parse::<u16>()
             .unwrap(),
@@ -83,7 +91,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new().nest("/_manage/health", health_router(health.clone()));
 
-    println!(
+    log::info!(
         "[HEALTH: {:?}] - Listening on: {}",
         health,
         listener

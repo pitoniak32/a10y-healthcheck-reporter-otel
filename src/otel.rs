@@ -1,10 +1,6 @@
 use std::time::Duration;
 
-use opentelemetry::{
-    global,
-    trace::TracerProvider,
-    KeyValue,
-};
+use opentelemetry::{global, trace::TracerProvider, KeyValue};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig};
 use opentelemetry_sdk::{
     metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider, Temporality},
@@ -39,17 +35,10 @@ pub fn setup_tracing_subscriber() -> OtelGuard {
 
     let tracer = tracer_provider.tracer("tracing-otel-subscriber");
 
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        EnvFilter::builder().from_env_lossy()
-    } else {
-        "info"
-            .to_string()
-            .parse()
-            .expect("valid EnvFilter value can be parsed")
-    };
-
     tracing_subscriber::registry()
-        .with(filter) // Read global subscriber filter from `RUST_LOG`
+        .with(EnvFilter::new(
+            std::env::var("RUST_LOG").unwrap_or_else(|_| "info".into()),
+        )) // Read global subscriber filter from `RUST_LOG`
         .with(tracing_subscriber::fmt::layer()) // Setup logging layer
         .with(MetricsLayer::new(meter_provider.clone()))
         .with(OpenTelemetryLayer::new(tracer))
@@ -85,7 +74,7 @@ fn init_tracer_provider() -> sdktrace::TracerProvider {
 
     global::set_tracer_provider(tracer_provider.clone());
 
-    return tracer_provider;
+    tracer_provider
 }
 
 // Construct MeterProvider for MetricsLayer

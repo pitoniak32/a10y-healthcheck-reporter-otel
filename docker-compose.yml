@@ -1,10 +1,10 @@
 services:
-  a10y:
-    image: test-local
-    ports:
-      - "3000:3000"
-    env_file:
-      - .env
+  # a10y:
+  #   image: test-local
+  #   ports:
+  #     - "3000:3000"
+  #   env_file:
+  #     - .env.non-secret
 
   jaeger-all-in-one:
     image: jaegertracing/all-in-one:latest
@@ -49,11 +49,6 @@ services:
             endpoint: jaeger-all-in-one:4317
             tls:
               insecure: true
-        connectors:
-          spanmetricsconnector:
-            dimensions:
-              - name: http.request.method
-              - name: http.response.status_code
         extensions:
           health_check:
           basicauth/tempo:
@@ -74,4 +69,4 @@ services:
             metrics:
               receivers: [otlp]
               processors: [batch]
-              exporters: [debug/prom, prometheusremotewrite]
+              exporters: [debug, prometheusremotewrite]
